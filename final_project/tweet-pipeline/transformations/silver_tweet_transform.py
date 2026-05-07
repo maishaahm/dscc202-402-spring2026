@@ -33,6 +33,10 @@
 # - pyspark.sql.types and pyspark.sql.functions
 # - re module for regex operations
 
+from pyspark import pipelines as dp
+from pyspark.sql.functions import *
+from pyspark.sql.types import *
+import re
 
 # COMMAND ----------
 
@@ -44,6 +48,11 @@
 # COMMAND ----------
 
 # TODO: Create streaming table definition
+
+dp.create_streaming_table(
+    name="tweets_silver",
+    comment="Silver Table: Clean tweet text and extract @mentions for sentiment analysis. Create one row per mention to enable per-user sentiment tracking."
+)
 
 
 # COMMAND ----------
@@ -62,6 +71,14 @@
 # COMMAND ----------
 
 # TODO: Define find_mentions function and create UDF
+
+def find_mentions(text):
+    if text is None:
+        return []
+    mentions = re.findall(r'@(\w+)', text)
+    return mentions
+
+find_mentions_udf = udf(find_mentions, ArrayType(StringType()))
 
 
 # COMMAND ----------
@@ -84,6 +101,19 @@
 
 # TODO: Define append_flow function for silver transformation
 
+@dp.append_flow(target="tweets_silver")
+
+def silver_transform():
+    bronze_df = spark.readStream.table("tweets_bronze")
+    return (
+        bronze_df
+        .withColumn("cleaned_text", regexp_replace(col("text"), "@\\S+", ""))
+        .withColumn("mentions", find_mentions_udf(col("text")))
+        .withColumn("mention", explode_outer(col("mentions")))
+        .withColumn("mention", lower(col("mention")))
+        .withColumn("timestamp", to_timestamp(col("date"), "EEE MMM dd HH:mm:ss zzz yyyy"))
+        .select("timestamp", "mention", "cleaned_text", "text", "sentiment")
+    )
 
 # COMMAND ----------
 
